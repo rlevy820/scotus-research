@@ -3,8 +3,8 @@
 Repository holding data related to my SCOTUS research project
 
 ## Variables
-voteId
-- identifier including caseId, docketId, caseIssuesId
+- voteId
+-   identifier including caseId, docketId, caseIssuesId
 dateDecision
 - 
 decisionType
