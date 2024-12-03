@@ -1,0 +1,392 @@
+---
+title: "US Supreme Court Research"
+subtitle: "Will the Supreme Court Affirm or Reverse the decision of the lower court? Can we build a statistical model to predict this behavior"
+author: "Ryan Levy (fpp5kw)"
+date: "2024-11-19"
+output: pdf_document
+---
+
+```{r}
+library(tidyr)
+library(dplyr)
+```
+
+
+# Introduction
+
+The majority of the cases the United States Supreme Court hears are appeals from lower courts. The interest of this project is to build a prediction model to classify for a given case, will the court affrim or deny the lower courts decision.
+
+# Data
+
+The data is collected from The Supreme Court Database, created by Harold J. Spaeth funded by the National Science Foundation classifying every single vote by a Supreme Court justice in all argued cases from 1946 to 2023.
+
+## Case Centered Data
+
+Case centered data provides case level information, each row corresponds to a dispute, no justice specific information.
+
+### Organized by Citation
+
+One row for each dispute. Consolidated cases with multiple dockets or issues are included once.
+
+### Organized by Docket
+
+Each case may have multiple dockets within it. This databases includes one row for each docket.
+
+### Organized by Issue/Legal Provision
+
+Each docket may include multiple issues/legal provisions. This database includes a row for each issue/legal provision for each docket.
+
+## Justice Centered Data
+
+Justice centered data includes a set of justice votes for each dispute.
+
+### Organized by Citation
+
+One set of justice votes for each dispute. Consolidated cases with multiple dockets or issues are included once.
+
+### Organized by Docket
+
+Each case may have multiple dockets within it. This databases includes one set of justice votes for each docket.
+
+### Organized by Issue/Legal Provision
+
+Each docket may include multiple issues/legal provisions. This database includes one set of justice votes for each issue/legal provision for each docket.
+
+# Exploratory Data Analysis: Case Centered Data
+
+## Loading Data
+
+```{r}
+case_circuit <- read.csv('https://raw.githubusercontent.com/rlevy820/scotus-research/refs/heads/main/data/raw/case-centered/SCDB_2024_01_caseCentered_Citation.csv')
+case_docket <- read.csv('https://raw.githubusercontent.com/rlevy820/scotus-research/refs/heads/main/data/raw/case-centered/SCDB_2024_01_caseCentered_Docket.csv')
+case_legal <- read.csv('https://raw.githubusercontent.com/rlevy820/scotus-research/refs/heads/main/data/raw/case-centered/SCDB_2024_01_caseCentered_LegalProvision.csv')
+```
+
+```{r}
+justice_circuit <- read.csv('~/Desktop/Personal/Research/SCOTUS Research/Data/SCDB_2024_01_justiceCentered_Citation.csv')
+justice_docket <- read.csv('~/Desktop/Personal/Research/SCOTUS Research/Data/SCDB_2024_01_justiceCentered_Docket.csv')
+justice_legal <- read.csv('~/Desktop/Personal/Research/SCOTUS Research/Data/SCDB_2024_01_justiceCentered_LegalProvision.csv')
+```
+
+
+## Comparing Databases: Case Centered Data
+
+```{r}
+# Are there any columns in one table that is not in another
+cols <- list(case_circuit = colnames(case_circuit), case_docket = colnames(case_docket), case_legal = colnames(case_legal))
+
+if (all(sapply(cols, function(x) identical(x, cols[[1]])))) {
+  print("All column names are the same.")
+} else {
+  print("Columns differ between tables.")
+}
+```
+
+```{r}
+# are there any tables that contain all the rows of the other tables
+
+# Find differing rows between tables
+diff_circuit_docket <- anti_join(case_circuit, case_docket, by = colnames(case_circuit))
+diff_circuit_legal <- anti_join(case_circuit, case_legal, by = colnames(case_circuit))
+diff_docket_legal <- anti_join(case_docket, case_legal, by = colnames(case_docket))
+
+# Combine results into a list
+differing_rows <- list(
+  circuit_not_in_docket = diff_circuit_docket,
+  circuit_not_in_legal = diff_circuit_legal,
+  docket_not_in_legal = diff_docket_legal
+)
+
+# Print summary
+lapply(differing_rows, nrow)
+```
+
+The results above show that all rows in `case_circuit` are in `case_legal` and all rows in `case_docket` are in `case_legal`. We can proceed by using only `case_legal` for EDA as it is the superset of the case centered data.
+
+## Comparing Databases: Justice Centered Data
+
+```{r}
+# Are there any columns in one table that is not in another
+cols <- list(justice_circuit = colnames(justice_circuit), justice_docket = colnames(justice_docket), justice_legal = colnames(justice_legal))
+
+if (all(sapply(cols, function(x) identical(x, cols[[1]])))) {
+  print("All column names are the same.")
+} else {
+  print("Columns differ between tables.")
+}
+```
+
+```{r}
+# are there any tables that contain all the rows of the other tables
+
+# Find differing rows between tables
+diff_circuit_docket_j <- anti_join(justice_circuit, justice_docket, by = colnames(justice_circuit))
+diff_circuit_legal_j <- anti_join(justice_circuit, justice_legal, by = colnames(justice_circuit))
+diff_docket_legal_j <- anti_join(justice_docket, justice_legal, by = colnames(justice_docket))
+
+# Combine results into a list
+differing_rows_j <- list(
+  circuit_not_in_docket_j = diff_circuit_docket_j,
+  circuit_not_in_legal_j = diff_circuit_legal_j,
+  docket_not_in_legal_j = diff_docket_legal_j
+)
+
+# Print summary
+lapply(differing_rows_j, nrow)
+```
+
+The results above show that all rows in `justice_circuit` are in `justice_legal` and all rows in `justice_docket` are in `justice_legal`. We can proceed by using only `justice_legal` for EDA as it is the superset of the case centered data.
+
+## Cleaning: Case Centered Data
+
+### Drop columns with high NA percentage
+
+```{r}
+# Look at NA percentage in each column
+na_percentage <- colSums(is.na(case_legal)) / nrow(case_legal) * 100
+na_percentage <- na_percentage[na_percentage > 50]
+print(na_percentage)
+
+# Remove columsn with high NA percentages
+case_legal_na_cols_removed <- case_legal[, !colnames(case_legal) %in% c(
+  "petitionerState", "respondentState", "adminAction", 
+  "adminActionState", "caseOriginState", "caseSourceState", 
+  "authorityDecision2"
+)]
+
+data_clean_v1 <- case_legal_na_cols_removed
+```
+Columns with high NA percentages: `petitionerState`, `respondentState`, `adminAction`, `adminActionState`, `caseOriginState`, `caseSourceState`, and `authorityDecision2`. These columns will be dropped.
+
+### Drop rows with NA
+
+```{r}
+# Remove rows with NA values now that major NA columns are already removed
+case_legal_na_removed <- data_clean_v1 %>%
+  drop_na()
+
+data_clean_v2 <- case_legal_na_removed
+
+print(dim(data_clean_v2))
+```
+
+The resulting table has 9,192 columns and 46 rows
+
+## Cleaning: Justice Centered Data
+
+### Drop columns with high NA percentage
+
+```{r}
+# Look at NA percentage in each column
+na_percentage_j <- colSums(is.na(justice_legal)) / nrow(justice_legal) * 100
+na_percentage_j <- na_percentage_j[na_percentage_j > 50]
+print(na_percentage_j)
+
+# Remove columsn with high NA percentages
+justice_legal_na_cols_removed <- justice_legal[, !colnames(justice_legal) %in% c(
+  "petitionerState", "respondentState", "adminAction", 
+  "adminActionState", "caseOriginState", "caseSourceState", 
+  "authorityDecision2", "firstAgreement", "secondAgreement"
+)]
+
+data_clean_jv1 <- justice_legal_na_cols_removed
+```
+
+Columns with high NA percentages: `petitionerState`, `respondentState`, `adminAction`, `adminActionState`, `caseOriginState`, `caseSourceState`, `authorityDecision2`, `firstAgreement`, `secondAgreement`. These columns will be dropped.
+
+### Drop rows with NA
+
+```{r}
+# Remove rows with NA values now that major NA columns are already removed
+justice_legal_na_removed <- data_clean_jv1 %>%
+  drop_na()
+
+data_clean_jv2 <- justice_legal_na_removed
+
+print(dim(data_clean_jv2))
+```
+
+The resulting table has 71,965 columns and 46 rows
+
+### Examining Columns
+
+```{r}
+head(data_clean_v2)
+head(data_clean_jv2)
+```
+Which columns are different in Justics and Case centered data
+
+```{r}
+# Compare columns between data_clean_v2 and data_clean_jv2
+columns_in_jv2 <- colnames(data_clean_jv2)
+columns_in_v2 <- colnames(data_clean_v2)
+
+# Find columns unique to each data frame
+unique_to_jv2 <- setdiff(columns_in_jv2, columns_in_v2)
+unique_to_v2 <- setdiff(columns_in_v2, columns_in_jv2)
+
+# Print results
+list(unique_to_data_clean_jv2 = unique_to_jv2)
+list(unique_to_data_clean_v2 = unique_to_v2)
+```
+
+`justice`, `justiceName`, `vote`, `opinion`, `direction`, and `majority` are in the justice centenred data and not in the case centered data.
+
+Create case consistancy between justice and case data. The following will see if there are any caseIds that are in justice data and not case data and vise versa.
+
+```{r}
+# Find caseIds in data_clean_v3 but not in data_clean_jv3
+caseIds_not_in_justice <- setdiff(data_clean_v2$caseId, data_clean_jv2$caseId)
+
+# Find caseIds in data_clean_jv3 but not in data_clean_v3
+caseIds_not_in_case <- setdiff(data_clean_jv2$caseId, data_clean_v2$caseId)
+
+# Print results
+cat("Number of caseIds in case-centered but not in justice-centered:", length(caseIds_not_in_justice), "\n")
+cat("Number of caseIds in justice-centered but not in case-centered:", length(caseIds_not_in_case), "\n")
+```
+
+Since there are only 665 mismatches cases that are in the case data but not the justice data. These will be removed to ensure consistency among the data set for new feature engineering.
+
+```{r}
+# Remove the 665 caseIds that are not in justice-centered data
+data_clean_v2_filtered <- data_clean_v2[!data_clean_v2$caseId %in% caseIds_not_in_justice, ]
+
+# Check the dimensions of the filtered data
+print(dim(data_clean_v2_filtered))
+
+# Confirm the removal by checking if any of the removed caseIds are still present
+any_remaining <- any(caseIds_not_in_justice %in% data_clean_v2_filtered$caseId)
+print(paste("Any remaining removed caseIds:", any_remaining))
+```
+
+Now the caseIds present in case and justice centered data are consistent.
+
+#### Response Variable
+
+`partyWinning` is the response variable. This is chosen as a binary coding of the caseDisposition variable which gives the different way the court will treat the lower courts decision, reducing to favorable, unfavorable, and unsure.
+
+With some adjustments, this variable is coded according to the following rules:
+- The petitioning party lost if the Supreme Court affirmed (caseDisposition=2) or dismissed the case/denied the petition (caseDisposition=9). 
+- The petitioning party won in part or in full if the Supreme Court reversed (caseDisposition=3), reversed and remanded (caseDisposition= 4), vacated and remanded (caseDisposition=5), affirmed and reversed in part (caseDisposition=6), affirmed and reverse in part and remanded (caseDisposition=7), or vacated (caseDisposition=8)
+- The petitioning party won or lost may be unclear if the Court certified to/from a lower court.
+
+```{r}
+party_win_counts <- table(data_clean_v2$partyWinning)
+party_win_counts_j <- table(data_clean_jv2$partyWinning)
+print(party_win_counts)
+print(party_win_counts_j)
+```
+There are only 3 entries in the case centered data where the decision on the lower courts ruling is unclear. Justice centered data has none. Since it represents such a small portion of the data, that column will be removed. This response variable will be binary.
+
+```{r}
+case_legal_partyWin_binary <- data_clean_v2[data_clean_v2$partyWinning != 2,]
+
+# keeping versions the same for consistency
+data_clean_v3 <- case_legal_partyWin_binary
+data_clean_jv3 <- data_clean_jv2
+```
+
+#### Explanatory Variables
+
+Drop columns that are decided after the partyWinning variable is known.
+
+```{r}
+# Drop specified columns from data_clean_v3
+data_clean_v4 <- data_clean_v3 %>%
+  select(-dateDecision, -usCite, -sctCite, -ledCite, -lexisCite, 
+         -lcDisagreement, -declarationUncon, -caseDisposition, 
+         -caseDispositionUnusual, -precedentAlteration, -voteUnclear, 
+         -decisionDirection, -decisionDirectionDissent, -authorityDecision1, 
+         -majOpinWriter, -majOpinAssigner, -splitVote, -majVotes, -minVotes)
+
+# Drop specified columns from data_clean_jv3
+data_clean_jv4 <- data_clean_jv3 %>%
+  select(-dateDecision, -usCite, -sctCite, -ledCite, -lexisCite, 
+         -lcDisagreement, -declarationUncon, -caseDisposition, 
+         -caseDispositionUnusual, -precedentAlteration, -voteUnclear, 
+         -decisionDirection, -decisionDirectionDissent, -authorityDecision1, 
+         -majOpinWriter, -majOpinAssigner, -splitVote, -majVotes, -minVotes)
+```
+
+```{r}
+head(data_clean_v4)
+head(data_clean_jv4)
+```
+#### Feature Engineering
+
+##### 1. Number of Dockets (`num_dockets`)
+- **Definition:** Total count of dockets associated with each case.
+- **Purpose:** Provides an indication of the case’s complexity or scope, as more dockets often involve more issues or deliberation.
+
+---
+
+##### 2. Entropy for Each Column (`[column]_entropy`)
+- **Definition:** Measures the variability or diversity of categorical values across dockets for a specific column (e.g., `lawType`, `issue`).
+- **Interpretation:**
+  - **Low Entropy:** Values are consistent across dockets (e.g., all dockets share the same `lawType`).
+  - **High Entropy:** Values vary significantly across dockets, indicating diversity in the feature.
+
+---
+
+##### 3. Most Frequent Value (`[column]_most_frequent`)
+- **Definition:** Identifies the value that appears most frequently across dockets for a given column.
+- **Purpose:** Provides a "representative" value that summarizes the dominant characteristic of the case for that feature.
+
+---
+
+##### 4. Revised Dominance Score (`[column]_dominance_score`)
+- **Definition:** Quantifies how strongly the most frequent value dominates other values within a case, adjusted for the total number of dockets.
+- **Calculation:**
+  - Scales the dominance score (proportion of the most frequent value) by the number of dockets.
+  - Reduces the score to `0` if the most frequent value isn’t strongly dominant (e.g., an even split).
+- **Interpretation:**
+  - **Higher Scores:** Indicates a single value dominates the case.
+  - **Score of 0:** Reflects no clear dominance (e.g., values are evenly distributed).
+
+```{r}
+entropy <- function(p) -sum(p * log(p), na.rm = TRUE)
+
+# Calculate aggregated features grouped by caseId
+aggregated_features <- data_clean_jv4 %>%
+  group_by(caseId) %>%
+  summarise(
+    num_dockets = n(),
+    lawSupp_entropy = entropy(table(lawSupp) / n()),
+    lawSupp_most_frequent = names(sort(table(lawSupp), decreasing = TRUE)[1]),
+    lawSupp_dominance_score = max(prop.table(table(lawSupp))),
+    
+    lawType_entropy = entropy(table(lawType) / n()),
+    lawType_most_frequent = names(sort(table(lawType), decreasing = TRUE)[1]),
+    lawType_dominance_score = max(prop.table(table(lawType))),
+    
+    issue_entropy = entropy(table(issue) / n()),
+    issue_most_frequent = names(sort(table(issue), decreasing = TRUE)[1]),
+    issue_dominance_score = max(prop.table(table(issue))),
+    
+    issueArea_entropy = entropy(table(issueArea) / n()),
+    issueArea_most_frequent = names(sort(table(issueArea), decreasing = TRUE)[1]),
+    issueArea_dominance_score = max(prop.table(table(issueArea)))
+  )
+
+# Merge the aggregated features back into data_clean_v4
+data_clean_v5 <- data_clean_v4 %>%
+  left_join(aggregated_features, by = "caseId")
+```
+
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
